@@ -20,6 +20,7 @@ namespace BlankSlime
 {
     public class Main : ModEntryPoint
     {
+        public const string VERSION = "1.3.2";
         internal static Assembly modAssembly = Assembly.GetExecutingAssembly();
         internal static string modName = $"{modAssembly.GetName().Name}";
         internal static string modDir = $"{Environment.CurrentDirectory}\\SRML\\Mods\\{modName}";
@@ -29,10 +30,12 @@ namespace BlankSlime
         internal static Dictionary<Identifiable.Id, Identifiable.Id> forcedAccociation = new Dictionary<Identifiable.Id, Identifiable.Id>();
         internal static List<SlimeDiet> diets = new List<SlimeDiet>();
         internal static Transform prefabParent;
-        internal static Console.ConsoleInstance Console;
+        internal static Main instance;
+        internal static Material outlineMaterial;
 
         public Main()
         {
+            instance = this;
             var p = new GameObject("PrefabParent");
             p.SetActive(false);
             Object.DontDestroyOnLoad(p);
@@ -41,8 +44,14 @@ namespace BlankSlime
 
         public override void PreLoad()
         {
-            Console = ConsoleInstance;
             HarmonyInstance.PatchAll();
+
+            var bundle = AssetBundle.LoadFromStream(modAssembly.GetManifestResourceStream("BlankSlime.outlineshader.assets"));
+            outlineMaterial = new Material(bundle.LoadAsset<Shader>("OutlineShader"));
+            outlineMaterial.name = "BlackOutline";
+            outlineMaterial.SetFloat("_OutlineWidth",0.07f);
+            bundle.Unload(false);
+
             SlimeEat.FoodGroup.NONTARRGOLD_SLIMES.AddItem(Ids.BLANK_SLIME);
             SlimeEat.FoodGroup.PLORTS.AddItem(Ids.BLANK_PLORT);
             PediaRegistry.RegisterIdEntry(Ids2.BLANK_SLIME, slimeIcon);
@@ -161,7 +170,7 @@ namespace BlankSlime
             a.ColorPalette.Bottom = Color.white;
             Material body = a.Structures[0].DefaultMaterials[0].Clone();
             body.name = "slimeBlank";
-            a.Structures[0].DefaultMaterials[0] = body;
+            a.Structures[0].DefaultMaterials = new[] { body, outlineMaterial };
             body.SetColor("_TopColor", Color.white);
             body.SetColor("_MiddleColor", Color.white);
             body.SetColor("_BottomColor", Color.white);
@@ -180,6 +189,7 @@ namespace BlankSlime
             emo.initAgitation = new SlimeEmotions.EmotionState(SlimeEmotions.Emotion.AGITATION, 0.5f, 0.5f, 0, 0);
             emo.initFear = new SlimeEmotions.EmotionState(SlimeEmotions.Emotion.FEAR, 0.5f, 0.5f, 0, 0);
             emo.initHunger = new SlimeEmotions.EmotionState(SlimeEmotions.Emotion.HUNGER, 0.5f, 0.5f, 0, 0);
+            slimePrefab.AddComponent<DisableEmotions>().emotions = new[] { SlimeEmotions.Emotion.FEAR, SlimeEmotions.Emotion.AGITATION };
             emo.initAgitation.SetEnabled(false);
             emo.initFear.SetEnabled(false);
             LookupRegistry.RegisterIdentifiablePrefab(id);
@@ -210,10 +220,10 @@ namespace BlankSlime
         }
 
 
-        public static void Log(string message) => Console.Log($"[{modName}]: " + message);
-        public static void LogError(string message) => Console.LogError($"[{modName}]: " + message);
-        public static void LogWarning(string message) => Console.LogWarning($"[{modName}]: " + message);
-        public static void LogSuccess(string message) => Console.LogSuccess($"[{modName}]: " + message);
+        public static void Log(string message) => instance.ConsoleInstance.Log($"[{modName}]: " + message);
+        public static void LogError(string message) => instance.ConsoleInstance.LogError($"[{modName}]: " + message);
+        public static void LogWarning(string message) => instance.ConsoleInstance.LogWarning($"[{modName}]: " + message);
+        public static void LogSuccess(string message) => instance.ConsoleInstance.LogSuccess($"[{modName}]: " + message);
 
         public static Texture2D LoadImage(string filename, TextureWrapMode wrapMode = default)
         {
@@ -428,6 +438,21 @@ namespace BlankSlime
         public static bool Contains(this SlimeEat.FoodGroup foodGroup, Identifiable.Id ident) => SlimeEat.foodGroupIds.TryGetValue(foodGroup, out var v) ? v.Contains(ident) : false;
     }
 
+    [RequireComponent(typeof(SlimeEmotions))]
+    public class DisableEmotions : MonoBehaviour
+    {
+        public SlimeEmotions.Emotion[] emotions;
+        SlimeEmotions _e;
+        void Awake() => _e = GetComponent<SlimeEmotions>();
+        public void Update()
+        {
+            if (_e.model != null)
+                foreach (var e in _e.model.allEmotions)
+                    if (e.enabled && Array.IndexOf(emotions, e.emotion) != -1)
+                        e.SetEnabled(false);
+        }
+    }
+
     [HarmonyPatch(typeof(ResourceBundle), "LoadFromText")]
     class Patch_LoadResources
     {
@@ -562,7 +587,8 @@ namespace BlankSlime
                     var def = definitions.GetSlimeByIdentifiableId(s);
                     if (def && def.Diet?.Produces?.Length > 0)
                         foreach (var item in def.Diet.Produces)
-                            Add(s, item);
+                            if (!Identifiable.IsSlime(item))
+                                Add(s, item);
                     var p = GameContext.Instance.LookupDirector.GetPrefab(s);
                     if (p)
                         foreach (var c in p.GetComponents<Component>())
@@ -872,12 +898,19 @@ namespace BlankSlime
             {
                 var ss = new ModSecretStyle(Ids.BLANK_SLIME, new Vector3(195.5f, 14.8f, -332), Quaternion.Euler(-15, 180, 0), "cellRanch_Lab", "Clear");
                 ss.SecretStyle.Structures[0] = new SlimeAppearanceStructure(ss.SecretStyle.Structures[0]);
-                ss.SecretStyle.Structures[0].DefaultMaterials[0] = Resources.FindObjectsOfTypeAll<Material>().First((x) => x.name == "Depth Water Ball").Clone();
-                ss.SecretStyle.Structures[0].DefaultMaterials[0].SetVector("_ColorMultiply", new Vector4(10, 10, 10, 100));
+                ss.SecretStyle.Structures[0].DefaultMaterials = new[] { Resources.FindObjectsOfTypeAll<Material>().First((x) => x.name == "Depth Water Ball").Clone(), Main.outlineMaterial };
+                var body = ss.SecretStyle.Structures[0].DefaultMaterials[0];
+                body.name = "slimeBlankBaseExotic";
+                body.SetVector("_ColorMultiply", new Vector4(10, 10, 10, 100));
                 var tex = new Texture2D(1, 1);
                 tex.SetPixel(0, 0, Color.white);
                 tex.Apply();
-                ss.SecretStyle.Structures[0].DefaultMaterials[0].SetTexture("_ColorRamp", tex);
+                body.SetTexture("_ColorRamp", tex);
+                body.SetFloat("_WaveOffset", -0.0001f);
+                body.SetFloat("_WaveHeight", 0);
+                body.SetFloat("_WaveNoise", 0);
+                body.SetFloat("_WaveSpeed", 0);
+                body.SetFloat("_WaveFade", 0);
                 ss.SecretStyle.NameXlateKey = "l.secret_style_" + Ids.BLANK_SLIME.ToString().ToLowerInvariant();
                 ss.SecretStyle.Icon = Main.LoadImage("slimeBlankExotic.png").CreateSprite();
             };
